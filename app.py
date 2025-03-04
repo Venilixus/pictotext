@@ -31,10 +31,6 @@ else:
 ###############################
 
 def get_openai_credit():
-    """
-    Attempts to fetch remaining credit via an unofficial OpenAI billing endpoint.
-    Note: This endpoint is unofficial and may fail.
-    """
     headers = {"Authorization": f"Bearer {openai.api_key}"}
     url = "https://api.openai.com/dashboard/billing/credit_grants"
     try:
@@ -43,8 +39,7 @@ def get_openai_credit():
             data = response.json()
             total_granted = data.get("total_granted", 0)
             total_used = data.get("total_used", 0)
-            remaining = total_granted - total_used
-            return remaining
+            return total_granted - total_used
         else:
             return None
     except Exception as e:
@@ -52,9 +47,6 @@ def get_openai_credit():
         return None
 
 def save_correction(file_name, original_text, correction, corrections_path="corrections.csv"):
-    """
-    Saves feedback corrections to a CSV file.
-    """
     new_entry = pd.DataFrame({
         "file_name": [file_name],
         "original_text": [original_text],
@@ -68,22 +60,16 @@ def save_correction(file_name, original_text, correction, corrections_path="corr
     updated_df.to_csv(corrections_path, index=False)
 
 def compute_file_hash(file_obj):
-    """
-    Computes an MD5 hash of the file's contents to uniquely identify the file.
-    """
     file_obj.seek(0)
     file_bytes = file_obj.read()
     file_obj.seek(0)
     return hashlib.md5(file_bytes).hexdigest()
 
 def is_valid_image(file_obj):
-    """
-    Checks if the uploaded file is a valid image.
-    """
     try:
         file_obj.seek(0)
         img = Image.open(file_obj)
-        img.verify()  # Validate image integrity
+        img.verify()
         file_obj.seek(0)
         return True
     except Exception:
@@ -91,17 +77,11 @@ def is_valid_image(file_obj):
         return False
 
 def extract_text(image_file):
-    """
-    Extracts text from an image using pytesseract.
-    """
     image_file.seek(0)
     image = Image.open(image_file)
     return pytesseract.image_to_string(image)
 
 def parse_eml(file_obj):
-    """
-    Parses an .eml file and extracts plain text content.
-    """
     file_obj.seek(0)
     msg = BytesParser(policy=policy.default).parse(file_obj)
     text_content = ""
@@ -115,11 +95,6 @@ def parse_eml(file_obj):
     return text_content
 
 def parse_ocr_to_structured_data(ocr_text):
-    """
-    Uses ChatGPT (gpt-3.5-turbo) to parse OCR text into structured data.
-    Returns a DataFrame with columns: date, price, metal_type, provider, description.
-    Date should be in dd-mm-yyyy format.
-    """
     prompt = f"""
     You are a helpful assistant that parses text from an OCR scan.
     The text might contain one or more line items of a purchase or inventory record.
@@ -172,10 +147,6 @@ def parse_ocr_to_structured_data(ocr_text):
         return pd.DataFrame(columns=["date", "price", "metal_type", "provider", "description"])
 
 def extract_numeric_price(price_str):
-    """
-    Extracts a numeric value from a price string using regex.
-    Returns a float.
-    """
     match = re.search(r'[\d,.]+', price_str)
     if match:
         num_str = match.group(0)
@@ -191,15 +162,6 @@ def extract_numeric_price(price_str):
         return 0.0
 
 def clean_and_format_data(df):
-    """
-    Cleans and formats the DataFrame:
-      - Converts dates to dd-mm-yyyy.
-      - Processes the price field into three columns:
-            Interpreted price, Price per kilo, Price per MT.
-          If the price string contains "MT" (case-insensitive), it's assumed to be per metric ton;
-          otherwise, it's assumed to be per kilogram.
-      - Drops the original 'price' column.
-    """
     if 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date'], format='%d-%m-%Y', errors='coerce', dayfirst=True)
         df['date'] = df['date'].dt.strftime('%d-%m-%Y')
@@ -212,10 +174,8 @@ def clean_and_format_data(df):
         def process_price_cell(price_str):
             numeric_value = extract_numeric_price(price_str)
             if "mt" in price_str.lower():
-                # Assumes price is per metric ton
                 return numeric_value, numeric_value / 1000.0, numeric_value
             else:
-                # Assumes price is per kilogram
                 return numeric_value, numeric_value, numeric_value * 1000.0
         
         processed = df['price'].apply(process_price_cell)
@@ -226,10 +186,6 @@ def clean_and_format_data(df):
     return df
 
 def append_to_output_df(new_data):
-    """
-    Appends new data to the output DataFrame stored in session state.
-    Reorders columns so that 'source' is the first column.
-    """
     new_data = clean_and_format_data(new_data)
     if 'output_df' not in st.session_state or st.session_state.output_df.empty:
         st.session_state.output_df = new_data
@@ -243,10 +199,6 @@ def append_to_output_df(new_data):
     return st.session_state.output_df
 
 def get_excel_file_bytes():
-    """
-    Converts the output DataFrame in session state to an Excel file in memory.
-    Returns a BytesIO object.
-    """
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         st.session_state.output_df.to_excel(writer, index=False)
@@ -254,9 +206,6 @@ def get_excel_file_bytes():
     return output
 
 def show_statistics(excel_df):
-    """
-    Displays summary statistics based on the given DataFrame.
-    """
     st.subheader("Overall Summary Statistics")
     st.write("Total records:", len(excel_df))
     if "Interpreted price" in excel_df.columns:
@@ -290,7 +239,6 @@ if page == "Process Files":
         accept_multiple_files=True
     )
     
-    # Initialize output DataFrame in session state if not exists
     if 'output_df' not in st.session_state:
         st.session_state.output_df = pd.DataFrame()
     
@@ -314,7 +262,6 @@ if page == "Process Files":
             status_text = st.empty()
             file_counter = 0
     
-            # Use session state's output_df to deduplicate by file_id
             processed_file_ids = set()
             if not st.session_state.output_df.empty and 'file_id' in st.session_state.output_df.columns:
                 processed_file_ids = set(st.session_state.output_df['file_id'].dropna().unique())
@@ -405,7 +352,6 @@ if page == "Process Files":
                 
             status_text.text("Processing complete!")
             st.success("Data processed!")
-            # Provide a download button for the Excel file generated in memory.
             excel_file = get_excel_file_bytes()
             st.download_button("Download Excel File", excel_file, file_name="output.xlsx")
     
