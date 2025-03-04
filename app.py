@@ -96,8 +96,7 @@ def extract_text(image_file):
     """
     image_file.seek(0)
     image = Image.open(image_file)
-    text = pytesseract.image_to_string(image)
-    return text
+    return pytesseract.image_to_string(image)
 
 def parse_eml(file_obj):
     """
@@ -197,8 +196,8 @@ def clean_and_format_data(df):
       - Converts dates to dd-mm-yyyy.
       - Processes the price field into three columns:
             Interpreted price, Price per kilo, Price per MT.
-          If the price string contains "MT" (case-insensitive), it is assumed to be per metric ton;
-          otherwise, it is assumed to be per kilogram.
+          If the price string contains "MT" (case-insensitive), it's assumed to be per metric ton;
+          otherwise, it's assumed to be per kilogram.
       - Drops the original 'price' column.
     """
     if 'date' in df.columns:
@@ -213,8 +212,10 @@ def clean_and_format_data(df):
         def process_price_cell(price_str):
             numeric_value = extract_numeric_price(price_str)
             if "mt" in price_str.lower():
+                # Assumes price is per metric ton
                 return numeric_value, numeric_value / 1000.0, numeric_value
             else:
+                # Assumes price is per kilogram
                 return numeric_value, numeric_value, numeric_value * 1000.0
         
         processed = df['price'].apply(process_price_cell)
@@ -224,45 +225,49 @@ def clean_and_format_data(df):
         df = df.drop(columns=['price'])
     return df
 
-def append_to_excel(new_data, excel_path='output.xlsx'):
+def append_to_output_df(new_data):
     """
-    Appends new data to a persistent Excel file after cleaning.
-    Reorders columns so that the 'source' column (if present) is the first column.
+    Appends new data to the output DataFrame stored in session state.
+    Reorders columns so that 'source' is the first column.
     """
     new_data = clean_and_format_data(new_data)
-    if os.path.exists(excel_path):
-        existing_df = pd.read_excel(excel_path)
-        existing_df = clean_and_format_data(existing_df)
-        updated_df = pd.concat([existing_df, new_data], ignore_index=True)
+    if 'output_df' not in st.session_state or st.session_state.output_df.empty:
+        st.session_state.output_df = new_data
     else:
-        updated_df = new_data
-    if 'source' in updated_df.columns:
-        cols = updated_df.columns.tolist()
+        st.session_state.output_df = pd.concat([st.session_state.output_df, new_data], ignore_index=True)
+    if 'source' in st.session_state.output_df.columns:
+        cols = st.session_state.output_df.columns.tolist()
         cols.remove('source')
         new_order = ['source'] + cols
-        updated_df = updated_df[new_order]
-    updated_df.to_excel(excel_path, index=False)
-    return updated_df
+        st.session_state.output_df = st.session_state.output_df[new_order]
+    return st.session_state.output_df
 
-def show_statistics(excel_path='output.xlsx'):
+def get_excel_file_bytes():
     """
-    Loads the Excel output file and displays summary statistics.
+    Converts the output DataFrame in session state to an Excel file in memory.
+    Returns a BytesIO object.
     """
-    if os.path.exists(excel_path):
-        df = pd.read_excel(excel_path)
-        st.subheader("Overall Summary Statistics")
-        st.write("Total records:", len(df))
-        if "Interpreted price" in df.columns:
-            st.write("Average Interpreted Price:", df["Interpreted price"].mean())
-        if "Price per kilo" in df.columns:
-            st.write("Average Price per kilo:", df["Price per kilo"].mean())
-        if "Price per MT" in df.columns:
-            st.write("Average Price per MT:", df["Price per MT"].mean())
-        st.subheader("Records by Provider")
-        if "provider" in df.columns:
-            st.dataframe(df.groupby("provider").size().reset_index(name="Count"))
-    else:
-        st.warning("No output file found. Process some files first.")
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        st.session_state.output_df.to_excel(writer, index=False)
+    output.seek(0)
+    return output
+
+def show_statistics(excel_df):
+    """
+    Displays summary statistics based on the given DataFrame.
+    """
+    st.subheader("Overall Summary Statistics")
+    st.write("Total records:", len(excel_df))
+    if "Interpreted price" in excel_df.columns:
+        st.write("Average Interpreted Price:", excel_df["Interpreted price"].mean())
+    if "Price per kilo" in excel_df.columns:
+        st.write("Average Price per kilo:", excel_df["Price per kilo"].mean())
+    if "Price per MT" in excel_df.columns:
+        st.write("Average Price per MT:", excel_df["Price per MT"].mean())
+    st.subheader("Records by Provider")
+    if "provider" in excel_df.columns:
+        st.dataframe(excel_df.groupby("provider").size().reset_index(name="Count"))
 
 ###############################
 # Main App: Page Selection
@@ -285,6 +290,10 @@ if page == "Process Files":
         accept_multiple_files=True
     )
     
+    # Initialize output DataFrame in session state if not exists
+    if 'output_df' not in st.session_state:
+        st.session_state.output_df = pd.DataFrame()
+    
     if uploaded_files:
         for uploaded_file in uploaded_files:
             file_name = uploaded_file.name
@@ -305,13 +314,10 @@ if page == "Process Files":
             status_text = st.empty()
             file_counter = 0
     
-            # Load existing output file (if any) and get a set of processed file IDs
+            # Use session state's output_df to deduplicate by file_id
             processed_file_ids = set()
-            output_file = 'output.xlsx'
-            if os.path.exists(output_file):
-                existing_df = pd.read_excel(output_file)
-                if 'file_id' in existing_df.columns:
-                    processed_file_ids = set(existing_df['file_id'].dropna().unique())
+            if not st.session_state.output_df.empty and 'file_id' in st.session_state.output_df.columns:
+                processed_file_ids = set(st.session_state.output_df['file_id'].dropna().unique())
     
             for uploaded_file in uploaded_files:
                 file_counter += 1
@@ -348,8 +354,8 @@ if page == "Process Files":
                                 df_csv[col] = ""
                         df_csv["source"] = file_name
                         df_csv["file_id"] = file_id
-                        excel_path = append_to_excel(df_csv)
-                        st.success(f"CSV file {file_name} processed and appended to Excel.")
+                        st.session_state.output_df = append_to_output_df(df_csv)
+                        st.success(f"CSV file {file_name} processed and appended to output.")
                         progress_bar.progress(file_counter / total_files)
                         continue
                     except Exception as e:
@@ -375,7 +381,7 @@ if page == "Process Files":
                     df_line_items["file_id"] = file_id
                     st.subheader(f"Parsed Line Items from {file_name}:")
                     st.dataframe(df_line_items)
-                    excel_path = append_to_excel(df_line_items)
+                    st.session_state.output_df = append_to_output_df(df_line_items)
                 else:
                     df_raw = pd.DataFrame({
                         "date": [""],
@@ -386,7 +392,7 @@ if page == "Process Files":
                         "source": [file_name],
                         "file_id": [file_id]
                     })
-                    excel_path = append_to_excel(df_raw)
+                    st.session_state.output_df = append_to_output_df(df_raw)
     
                 st.subheader(f"Feedback for {file_name}")
                 correction = st.text_area(f"Enter correction for {file_name} (if any):", key=file_name)
@@ -398,10 +404,14 @@ if page == "Process Files":
                 time.sleep(0.5)
                 
             status_text.text("Processing complete!")
-            st.success("Excel file updated!")
-            with open(output_file, "rb") as file:
-                st.download_button("Download Excel File", file, file_name="output.xlsx")
+            st.success("Data processed!")
+            # Provide a download button for the Excel file generated in memory.
+            excel_file = get_excel_file_bytes()
+            st.download_button("Download Excel File", excel_file, file_name="output.xlsx")
     
 elif page == "Statistics":
     st.title("Statistics")
-    show_statistics()
+    if 'output_df' in st.session_state and not st.session_state.output_df.empty:
+        show_statistics(st.session_state.output_df)
+    else:
+        st.warning("No data available. Process some files first.")
