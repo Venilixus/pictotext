@@ -4,7 +4,7 @@ import json
 import re
 import hashlib
 import requests
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # Not used for API key fallback anymore
 import streamlit as st
 from PIL import Image, UnidentifiedImageError
 import pytesseract
@@ -16,18 +16,19 @@ import email
 from email import policy
 from email.parser import BytesParser
 
-# Load environment variables (if any)
+# Load environment variables (if needed for non-API key settings)
 load_dotenv()
 
-# Explicitly set the Tesseract executable path
+# Explicitly set Tesseract executable path
 pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
-# Sidebar: OpenAI API Key Input
-api_key_input = st.sidebar.text_input("Enter OpenAI API Key", type="password")
-if api_key_input:
-    openai.api_key = api_key_input
+# Sidebar: OpenAI API Key Input - no fallback to environment variable.
+api_key_input = st.sidebar.text_input("Enter your OpenAI API Key", type="password")
+if not api_key_input:
+    st.sidebar.error("Please enter your OpenAI API Key to use the tool.")
+    openai.api_key = None
 else:
-    openai.api_key = os.getenv("OPENAI_API_KEY")
+    openai.api_key = api_key_input
 
 ###############################
 # Helper Functions
@@ -36,8 +37,10 @@ else:
 def get_openai_credit():
     """
     Attempts to fetch remaining credit via an unofficial OpenAI billing endpoint.
-    Note: This endpoint is unofficial and may fail.
+    This function only runs if an API key is provided.
     """
+    if not openai.api_key:
+        return None
     headers = {"Authorization": f"Bearer {openai.api_key}"}
     url = "https://api.openai.com/dashboard/billing/credit_grants"
     try:
@@ -85,7 +88,7 @@ def is_valid_image(file_obj):
     try:
         file_obj.seek(0)
         img = Image.open(file_obj)
-        img.verify()  # Validate image integrity
+        img.verify()
         file_obj.seek(0)
         return True
     except Exception:
@@ -122,6 +125,9 @@ def parse_ocr_to_structured_data(ocr_text):
     Returns a DataFrame with columns: date, price, metal_type, provider, description.
     Date should be in dd-mm-yyyy format.
     """
+    if not openai.api_key:
+        st.error("OpenAI API key is not set. Please enter it in the sidebar.")
+        return pd.DataFrame()
     prompt = f"""
     You are a helpful assistant that parses text from an OCR scan.
     The text might contain one or more line items of a purchase or inventory record.
